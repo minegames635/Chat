@@ -35,41 +35,54 @@ button:disabled,input:disabled{opacity:.5}
 const $=id=>document.getElementById(id),log=$("log"),st=$("st"),bar=document.querySelector("#bar i");
 const add=(t,c)=>{const d=document.createElement("div");d.className="m "+c;d.textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight;return d};
 const SYS="Ты умный, дружелюбный ассистент. Отвечай на языке пользователя (по умолчанию по-русски), понятно и по делу. Если не знаешь — честно скажи.";
-let engine=null,hist=[{role:"system",content:SYS}],busy=false;
-add("Привет! Это настоящая языковая модель, она работает прямо на твоём устройстве. Выбери модель и нажми «Загрузить». Первый раз она скачается (нужен интернет), потом сохранится в браузере и будет работать без сети.","b");
+let engine=null,wl=null,hist=[],busy=false;
+add("Привет! Это настоящая языковая модель, она работает прямо на твоём устройстве. Выбери модель и нажми «Загрузить». Первый раз она скачается (нужен интернет), потом сохранится в браузере.","b");
+async function setup(){
+  let persist=true;
+  try{await caches.open("t");if(!/^https?:|^file:/.test(location.protocol))throw 0}catch(_){persist=false}
+  if(!persist){
+    const mem=new Map(),k=r=>typeof r==="string"?r:r.url;
+    const c={match:async r=>{const v=mem.get(k(r));return v?new Response(v.b,{headers:v.h}):undefined},
+      put:async(r,x)=>{mem.set(k(r),{b:await x.clone().arrayBuffer(),h:[...x.headers]})},
+      add:async r=>{const x=await fetch(k(r));if(!x.ok)throw new Error("HTTP "+x.status);mem.set(k(r),{b:await x.arrayBuffer(),h:[...x.headers]})},
+      delete:async r=>mem.delete(k(r)),keys:async()=>[...mem.keys()].map(u=>new Request(u))};
+    Object.defineProperty(window,"caches",{configurable:true,value:{open:async()=>c,has:async()=>true,delete:async()=>true,keys:async()=>[]}});
+    add("Нет постоянного хранилища: модель загрузится в память. Для сохранения открой страницу в Safari или Chrome.","b");
+  }
+  wl=await import("https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm");
+}
+async function loadModel(){
+  $("q").disabled=$("go").disabled=true;
+  try{if(engine)await engine.unload()}catch(_){}
+  engine=null;
+  const id=$("mod").value;
+  const cfg={...wl.prebuiltAppConfig,useIndexedDBCache:false};
+  engine=await wl.CreateMLCEngine(id,{appConfig:cfg,initProgressCallback:r=>{st.textContent=r.text;bar.style.width=(r.progress*100)+"%"}},{context_window_size:2048});
+  st.textContent="Готово. Модель работает на твоём устройстве.";bar.style.width="100%";
+  $("q").disabled=$("go").disabled=false;
+}
 $("load").onclick=async()=>{
-  if(!navigator.gpu){st.textContent="Нет WebGPU. Открой файл в Chrome (ПК/Android) или Safari 26+ (iPhone).";add("Этот браузер не поддерживает WebGPU, на нём модель не запустится. Открой файл в Chrome на компьютере или Android, либо в Safari на iPhone (iOS 26 и новее).","b");return}
+  if(!navigator.gpu){add("Этот браузер не поддерживает WebGPU. Открой в Chrome (ПК/Android) или Safari (iOS 26+).","b");return}
   $("load").disabled=$("mod").disabled=true;
-  try{
-    let persist=true;
-    try{await caches.open("t");await new Promise((ok,no)=>{const r=indexedDB.open("t");r.onsuccess=ok;r.onerror=no});if(!/^https?:|^file:/.test(location.protocol))throw 0}catch(_){persist=false}
-    if(!persist){
-      const mem=new Map(),k=r=>typeof r==="string"?r:r.url;
-      const c={match:async r=>{const v=mem.get(k(r));return v?new Response(v.b,{headers:v.h}):undefined},
-        put:async(r,x)=>{mem.set(k(r),{b:await x.clone().arrayBuffer(),h:[...x.headers]})},
-        add:async r=>{const x=await fetch(k(r));if(!x.ok)throw new Error("HTTP "+x.status);mem.set(k(r),{b:await x.arrayBuffer(),h:[...x.headers]})},
-        delete:async r=>mem.delete(k(r)),keys:async()=>[...mem.keys()].map(u=>new Request(u))};
-      Object.defineProperty(window,"caches",{configurable:true,value:{open:async()=>c,has:async()=>true,delete:async()=>true,keys:async()=>[]}});
-      add("Страница открыта во встроенном окне без постоянного хранилища: модель загрузится в память и после закрытия скачается заново. Для сохранения откройте файл в Safari или Chrome.","b");
-    }
-    const wl=await import("https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm");
-    const id=$("mod").value,list=wl.prebuiltAppConfig.model_list.map(m=>m.model_id);
-    if(!list.includes(id))throw new Error("Модели нет в списке библиотеки. Доступные Qwen/Smol: "+list.filter(x=>/qwen2\.5-[01]|smollm2/i.test(x)).slice(0,8).join(", "));
-    const cfg={...wl.prebuiltAppConfig,useIndexedDBCache:false};
-    engine=await wl.CreateMLCEngine(id,{appConfig:cfg,initProgressCallback:r=>{st.textContent=r.text;bar.style.width=(r.progress*100)+"%"}});
-    st.textContent="Готово. Модель работает на твоём устройстве.";bar.style.width="100%";
-    $("q").disabled=$("go").disabled=false;$("q").focus();
-  }catch(e){const m=(e.name||"Error")+": "+(e.message||e);st.textContent="Ошибка загрузки";add("Ошибка при загрузке:\n"+m+"\n\nПротокол страницы: "+location.protocol+" · WebGPU: "+(navigator.gpu?"да":"нет"),"b");$("load").disabled=$("mod").disabled=false}
+  try{await setup();await loadModel();$("q").focus()}
+  catch(e){add("Ошибка при загрузке:\n"+(e.name||"Error")+": "+(e.message||e)+"\n\nПротокол: "+location.protocol,"b");st.textContent="Ошибка загрузки"}
+  $("load").disabled=$("mod").disabled=false;
 };
 async function send(e){
   e&&e.preventDefault();const t=$("q").value.trim();if(!t||!engine||busy)return;
-  busy=true;$("q").value="";add(t,"u");hist.push({role:"user",content:t});
+  busy=true;$("q").value="";add(t,"u");
   const d=add("…","b");let out="";
+  const msgs=()=>[{role:"system",content:SYS},...hist.slice(-6),{role:"user",content:t}];
   try{
-    const s=await engine.chat.completions.create({messages:hist.slice(-13).filter((m,i,a)=>m.role!=="system"||i===0).length?[hist[0],...hist.slice(1).slice(-12)]:hist,stream:true,temperature:.7,max_tokens:600});
+    const s=await engine.chat.completions.create({messages:msgs(),stream:true,temperature:.7,max_tokens:350});
     for await(const c of s){out+=c.choices[0]?.delta?.content||"";d.textContent=out;log.scrollTop=log.scrollHeight}
-  }catch(err){d.textContent="Ошибка: "+err.message}
-  hist.push({role:"assistant",content:out});busy=false;
+    hist.push({role:"user",content:t},{role:"assistant",content:out});
+  }catch(err){
+    d.textContent="Модель сбилась (скорее всего не хватило памяти телефона). Перезагружаю её, это займёт несколько секунд…";
+    try{await loadModel();d.textContent="Модель перезагружена. Повтори вопрос. Если ошибка повторяется, выбери «Лёгкую» модель.";hist=[]}
+    catch(e2){d.textContent="Не удалось перезагрузить: "+(e2.message||e2)+". Обнови страницу."}
+  }
+  busy=false;
 }
 $("f").addEventListener("submit",send);
 </script></body></html>
